@@ -25,7 +25,7 @@ def authenticate_user(token):
             index_repository(repo, db)
 
             text = answer_question(db, "Where does authentication happen?")
-            self.assertIn("Most relevant indexed evidence", text)
+            self.assertIn("Relevant components", text)
             self.assertIn("authenticate_user", text)
 
     def test_llm_failure_falls_back_to_heuristic(self) -> None:
@@ -48,7 +48,7 @@ def checkout():
                 text = answer_question(db, "How does checkout work?", use_llm=True)
 
             self.assertIn("LLM call failed", text)
-            self.assertIn("Most relevant indexed evidence", text)
+            self.assertIn("Relevant components", text)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,23 @@ from . import graph
 QUESTION_PATTERNS = {
     "authentication": ["auth", "login", "token", "oauth", "jwt"],
     "checkout": ["checkout", "cart", "payment", "order"],
+    "performance": ["slow", "latency", "timeout", "throughput"],
+}
+
+STOPWORDS = {
+    "where",
+    "what",
+    "does",
+    "happen",
+    "when",
+    "how",
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "that",
+    "this",
 }
 
 
@@ -25,25 +42,35 @@ class EvidenceItem:
     lineno: int | None
 
 
-def _topic_from_question(question: str) -> str | None:
+def _extract_terms(question: str) -> list[str]:
     q = question.lower()
+    terms: list[str] = []
+
     for topic, keywords in QUESTION_PATTERNS.items():
         if any(kw in q for kw in keywords):
-            return topic
+            terms.append(topic)
+            terms.extend(keywords)
 
-    tokens = [t for t in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", q) if t not in {"where", "what", "does", "happen", "when"}]
-    if tokens:
-        return tokens[0]
-    return None
+    tokens = [t for t in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", q) if t not in STOPWORDS]
+    terms.extend(tokens)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for t in terms:
+        if t not in seen:
+            seen.add(t)
+            deduped.append(t)
+    return deduped[:10]
 
 
-def _collect_evidence(db_path: Path, question: str, limit: int = 30) -> list[EvidenceItem]:
+def _collect_evidence(db_path: Path, question: str, limit: int = 40) -> list[EvidenceItem]:
     conn = graph.connect(db_path)
-    topic = _topic_from_question(question)
-    if topic is None:
+    terms = _extract_terms(question)
+
+    if not terms:
         rows = conn.execute(
             """
-            SELECT f.path, s.name AS symbol, s.kind, 'top' AS relation_type, NULL AS lineno
+            SELECT f.path, s.name AS symbol, s.kind, 'top' AS relation_type, s.lineno AS lineno
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             ORDER BY s.name
@@ -52,21 +79,20 @@ def _collect_evidence(db_path: Path, question: str, limit: int = 30) -> list[Evi
             (limit,),
         ).fetchall()
     else:
-        terms = [topic]
-        terms.extend(QUESTION_PATTERNS.get(topic, []))
-
         clauses = " OR ".join(
             ["lower(s.name) LIKE ? OR lower(f.path) LIKE ? OR lower(COALESCE(r.dst_symbol_name, '')) LIKE ?" for _ in terms]
         )
         params: list[str | int] = []
         for term in terms:
-            like = f"%{term.lower()}%"
+            like = f"%{term}%"
             params.extend([like, like, like])
-        params.append(limit)
+        params.append(limit * 3)
 
-        rows = conn.execute(
+        raw_rows = conn.execute(
             f"""
-            SELECT f.path, s.name AS symbol, s.kind, COALESCE(r.relation_type, 'declares') AS relation_type, COALESCE(r.lineno, s.lineno) AS lineno
+            SELECT f.path, s.name AS symbol, s.kind,
+                   COALESCE(r.relation_type, 'declares') AS relation_type,
+                   COALESCE(r.lineno, s.lineno) AS lineno
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             LEFT JOIN relations r ON r.dst_symbol_name = s.name
@@ -76,8 +102,30 @@ def _collect_evidence(db_path: Path, question: str, limit: int = 30) -> list[Evi
             """,
             tuple(params),
         ).fetchall()
-    conn.close()
 
+        # lightweight ranking: reward direct token overlap in symbol/path names
+        scored: list[tuple[int, object]] = []
+        for row in raw_rows:
+            hay = f"{row['symbol']} {row['path']} {row['relation_type']}".lower()
+            score = sum(2 if t in row["symbol"].lower() else 1 for t in terms if t in hay)
+            scored.append((score, row))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        rows = [row for _, row in scored[:limit]]
+
+    if not rows:
+        rows = conn.execute(
+            """
+            SELECT f.path, s.name AS symbol, s.kind, 'fallback' AS relation_type, s.lineno AS lineno
+            FROM symbols s
+            JOIN files f ON f.id = s.file_id
+            ORDER BY s.name
+            LIMIT ?
+            """,
+            (min(limit, 10),),
+        ).fetchall()
+
+    conn.close()
     return [
         EvidenceItem(
             path=row["path"],
@@ -94,13 +142,13 @@ def _heuristic_answer(question: str, evidence: list[EvidenceItem]) -> str:
     if not evidence:
         return "No indexed evidence found. Run indexing first or refine your question."
 
-    lines = [f"Question: {question}", "", "Most relevant indexed evidence:"]
-    for item in evidence[:15]:
+    lines = ["Direct answer (evidence-grounded)", f"Question: {question}", ""]
+    lines.append("Relevant components:")
+    for item in evidence[:12]:
         location = f"{item.path}:{item.lineno}" if item.lineno else item.path
         lines.append(f"- `{item.symbol}` ({item.kind}) via `{item.relation_type}` in `{location}`")
-
     lines.append("")
-    lines.append("This is a graph-grounded heuristic answer. Enable --llm for richer synthesis.")
+    lines.append("Confidence note: heuristic mode. Use --llm for higher quality synthesis.")
     return "\n".join(lines)
 
 
@@ -118,22 +166,24 @@ def _llm_answer(question: str, evidence: list[EvidenceItem], model: str | None =
     ]
     evidence_text = "\n".join(evidence_lines) if evidence_lines else "- no evidence found"
 
-    system_prompt = (
-        "You are a codebase analysis assistant. Answer only from provided evidence. "
-        "If evidence is weak, explicitly say uncertainty and what to inspect next."
-    )
-    user_prompt = (
-        f"Question:\n{question}\n\n"
-        f"Indexed evidence:\n{evidence_text}\n\n"
-        "Return a concise natural-language explanation with:\n"
-        "1) direct answer\n2) key code components\n3) uncertainty notes"
-    )
-
     payload = {
         "model": model_name,
         "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {
+                "role": "system",
+                "content": (
+                    "You are a codebase analysis assistant. Answer strictly from provided evidence. "
+                    "State uncertainty explicitly if evidence is weak."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Question:\n{question}\n\n"
+                    f"Indexed evidence:\n{evidence_text}\n\n"
+                    "Respond with:\n1) direct answer\n2) key components and flow\n3) uncertainty notes"
+                ),
+            },
         ],
         "temperature": 0.1,
     }
@@ -151,20 +201,38 @@ def _llm_answer(question: str, evidence: list[EvidenceItem], model: str | None =
     with urllib.request.urlopen(req, timeout=45) as resp:
         raw = json.loads(resp.read().decode("utf-8"))
 
-    try:
-        return raw["choices"][0]["message"]["content"].strip()
-    except Exception as exc:  # parsing external API response
-        raise RuntimeError(f"Unexpected LLM response shape: {raw}") from exc
+    return raw["choices"][0]["message"]["content"].strip()
 
 
-def answer_question(db_path: Path, question: str, use_llm: bool = False, model: str | None = None) -> str:
+def answer_question_with_metadata(
+    db_path: Path,
+    question: str,
+    use_llm: bool = False,
+    model: str | None = None,
+) -> dict[str, object]:
     evidence = _collect_evidence(db_path, question)
+    evidence_count = len(evidence)
+
+    confidence = min(0.95, 0.25 + 0.05 * min(evidence_count, 10))
+    if use_llm:
+        confidence = min(0.98, confidence + 0.08)
 
     if use_llm:
         try:
-            return _llm_answer(question, evidence, model=model)
+            answer = _llm_answer(question, evidence, model=model)
         except Exception as exc:
-            fallback = _heuristic_answer(question, evidence)
-            return f"LLM call failed ({exc}).\n\n{fallback}"
+            answer = f"LLM call failed ({exc}).\n\n" + _heuristic_answer(question, evidence)
+            confidence = max(0.3, confidence - 0.2)
+    else:
+        answer = _heuristic_answer(question, evidence)
 
-    return _heuristic_answer(question, evidence)
+    return {
+        "answer": answer,
+        "evidence_count": evidence_count,
+        "confidence": confidence,
+        "needs_human": confidence < 0.45 or evidence_count == 0,
+    }
+
+
+def answer_question(db_path: Path, question: str, use_llm: bool = False, model: str | None = None) -> str:
+    return str(answer_question_with_metadata(db_path, question, use_llm=use_llm, model=model)["answer"])

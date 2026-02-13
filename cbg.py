@@ -71,6 +71,9 @@ def cmd_migration(args: argparse.Namespace) -> int:
     return 0
 
 
+
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cbg", description="CodebaseGPT CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -97,6 +100,8 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--llm", action="store_true", help="Use configured LLM API for answer synthesis")
     ask.add_argument("--model", help="Override model name when using --llm")
     ask.set_defaults(func=cmd_ask)
+
+
 
     docs = sub.add_parser("generate-docs", help="Generate architecture docs")
     docs.add_argument("--db", required=True)
