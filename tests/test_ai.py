@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from codebasegpt.ai import answer_question
+from codebasegpt.ai import answer_question, answer_question_with_metadata
 from codebasegpt.indexer import index_repository
 
 
@@ -27,6 +27,31 @@ def authenticate_user(token):
             text = answer_question(db, "Where does authentication happen?")
             self.assertIn("Relevant components", text)
             self.assertIn("authenticate_user", text)
+
+    def test_call_paths_are_exposed_in_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo = tmp_path / "repo"
+            repo.mkdir()
+            (repo / "flow.py").write_text(
+                """
+
+def leaf():
+    return True
+
+def middle():
+    return leaf()
+
+def entry():
+    return middle()
+""".strip(),
+                encoding="utf-8",
+            )
+            db = tmp_path / "graph.sqlite"
+            index_repository(repo, db)
+
+            meta = answer_question_with_metadata(db, "How does leaf work?")
+            self.assertIn("call_paths", meta)
 
     def test_llm_failure_falls_back_to_heuristic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

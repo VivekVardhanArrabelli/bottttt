@@ -1,1 +1,2 @@
-{"question":"Where does authentication happen?","must_include":["authenticate_user"]}
+{"question":"Where does authentication happen?","must_include":["authenticate_user"],"expected_policy_flags":[]}
+{"question":"possible security breach in login flow","must_include":["Relevant components"],"expected_policy_flags":["security"]}

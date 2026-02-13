@@ -51,3 +51,21 @@ python cbg.py evaluate \
 ## Roadmap execution status
 
 See `ROADMAP.md` for the 3-phase plan and what has now been implemented from each phase.
+
+
+## Guardrail tuning
+
+Set environment variables to tune escalation behavior:
+
+```bash
+export CBG_MIN_CONFIDENCE=0.55
+export CBG_FLAGGED_MAX_CONFIDENCE=0.45
+```
+
+## Evaluation diagnostics
+
+Use `--min-confidence` to quickly count low-confidence cases:
+
+```bash
+python cbg.py evaluate --db /path/to/repo/.codebasegpt.sqlite --dataset tests/fixtures/eval_dataset.jsonl --min-confidence 0.6
+```

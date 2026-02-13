@@ -1,10 +1,11 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 from codebasegpt.ai import answer_question_with_metadata
 from codebasegpt.indexer import index_repository
-from codebasegpt.ops import redact_pii
+from codebasegpt.ops import guardrail_settings, redact_pii
 
 
 class OpsTests(unittest.TestCase):
@@ -13,6 +14,17 @@ class OpsTests(unittest.TestCase):
         out = redact_pii(text)
         self.assertIn("[REDACTED_EMAIL]", out)
         self.assertIn("[REDACTED_CARD]", out)
+
+    def test_guardrail_settings_env(self) -> None:
+        old = os.environ.get("CBG_MIN_CONFIDENCE")
+        os.environ["CBG_MIN_CONFIDENCE"] = "0.8"
+        try:
+            self.assertEqual(guardrail_settings()["min_confidence"], 0.8)
+        finally:
+            if old is None:
+                os.environ.pop("CBG_MIN_CONFIDENCE", None)
+            else:
+                os.environ["CBG_MIN_CONFIDENCE"] = old
 
     def test_policy_flags_and_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

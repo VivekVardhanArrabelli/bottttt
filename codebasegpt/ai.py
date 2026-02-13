@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import graph
-from .ops import append_jsonl, detect_policy_flags, load_codeowners, redact_pii, suggest_owners
+from .ops import append_jsonl, detect_policy_flags, guardrail_settings, load_codeowners, redact_pii, suggest_owners
 
 
 QUESTION_PATTERNS = {
@@ -141,7 +141,27 @@ def _collect_evidence(db_path: Path, question: str, limit: int = 40) -> list[Evi
     ]
 
 
-def _heuristic_answer(question: str, evidence: list[EvidenceItem]) -> str:
+def _call_paths_for_evidence(db_path: Path, evidence: list[EvidenceItem], depth: int = 3) -> list[list[str]]:
+    conn = graph.connect(db_path)
+    try:
+        candidates = [e.symbol for e in evidence[:6] if e.kind in {"function", "class"}]
+        paths: list[list[str]] = []
+        for symbol in candidates:
+            paths.extend(graph.call_paths_to_symbol(conn, symbol, max_depth=depth, limit=4))
+        unique: list[list[str]] = []
+        seen: set[tuple[str, ...]] = set()
+        for p in paths:
+            key = tuple(p)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(p)
+        return unique[:8]
+    finally:
+        conn.close()
+
+
+def _heuristic_answer(question: str, evidence: list[EvidenceItem], call_paths: list[list[str]] | None = None) -> str:
     if not evidence:
         return "No indexed evidence found. Run indexing first or refine your question."
 
@@ -149,6 +169,12 @@ def _heuristic_answer(question: str, evidence: list[EvidenceItem]) -> str:
     for item in evidence[:12]:
         location = f"{item.path}:{item.lineno}" if item.lineno else item.path
         lines.append(f"- `{item.symbol}` ({item.kind}) via `{item.relation_type}` in `{location}`")
+    if call_paths:
+        lines.append("")
+        lines.append("Observed call paths:")
+        for path in call_paths[:4]:
+            lines.append("- " + " -> ".join(f"`{node}`" for node in path))
+
     lines.extend(["", "Uncertainty: heuristic mode. Use --llm for richer synthesis."])
     return "\n".join(lines)
 
@@ -209,11 +235,13 @@ def answer_question_with_metadata(
     model: str | None = None,
     repo_path: Path | None = None,
 ) -> dict[str, object]:
+    settings = guardrail_settings()
     flags = detect_policy_flags(question)
     evidence = _collect_evidence(db_path, question)
+    call_paths = _call_paths_for_evidence(db_path, evidence)
     evidence_count = len(evidence)
 
-    confidence = min(0.95, 0.25 + 0.05 * min(evidence_count, 10))
+    confidence = min(0.95, 0.25 + 0.05 * min(evidence_count, 10) + 0.03 * min(len(call_paths), 4))
     if use_llm:
         confidence = min(0.98, confidence + 0.08)
 
@@ -221,15 +249,15 @@ def answer_question_with_metadata(
         try:
             answer = _llm_answer(question, evidence, model=model)
         except Exception as exc:
-            answer = f"LLM call failed ({exc}).\n\n" + _heuristic_answer(question, evidence)
+            answer = f"LLM call failed ({exc}).\n\n" + _heuristic_answer(question, evidence, call_paths=call_paths)
             confidence = max(0.3, confidence - 0.2)
     else:
-        answer = _heuristic_answer(question, evidence)
+        answer = _heuristic_answer(question, evidence, call_paths=call_paths)
 
     if flags:
-        confidence = min(confidence, 0.5)
+        confidence = min(confidence, settings["flagged_max_confidence"])
 
-    needs_human = confidence < 0.45 or evidence_count == 0 or bool(flags)
+    needs_human = confidence < settings["min_confidence"] or evidence_count == 0 or bool(flags)
 
     evidence_paths = sorted({e.path for e in evidence[:15]})
     owners: list[str] = []
@@ -246,6 +274,7 @@ def answer_question_with_metadata(
         "policy_flags": flags,
         "evidence_paths": evidence_paths,
         "owner_suggestions": owners,
+        "call_paths": call_paths,
         "next_actions": [
             "Escalate for human review" if needs_human else "Respond with cited components",
             "Inspect top evidence paths for confirmation",

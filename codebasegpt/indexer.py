@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
@@ -132,9 +133,14 @@ def analyze_file(path: Path) -> FileIndexResult:
     lang = SUPPORTED_SUFFIXES[path.suffix]
     result = FileIndexResult(language=lang)
 
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception:
+        return result
+
     if lang == "python":
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
+            tree = ast.parse(content)
             analyzer = PythonAnalyzer()
             analyzer.visit(tree)
             result.symbols.extend(analyzer.symbols)
@@ -142,6 +148,38 @@ def analyze_file(path: Path) -> FileIndexResult:
         except Exception:
             # Keep indexing resilient: even unreadable files are tracked.
             pass
+        return result
+
+    # Lightweight cross-language extraction for Phase 1 parity improvements.
+    for lineno, line in enumerate(content.splitlines(), start=1):
+        stripped = line.strip()
+
+        if lang in {"javascript", "typescript"}:
+            m = re.match(r"(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+            if m:
+                result.symbols.append(Symbol(name=m.group(1), kind="function", lineno=lineno))
+            m = re.match(r"(?:export\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+            if m:
+                result.symbols.append(Symbol(name=m.group(1), kind="class", lineno=lineno))
+            imp = re.search(r"from\s+[\"']([^\"']+)[\"']", stripped)
+            if imp:
+                result.relations.append(Relation(dst_symbol_name=imp.group(1), relation_type="imports", lineno=lineno))
+
+        elif lang == "go":
+            m = re.match(r"func\s+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+            if m:
+                result.symbols.append(Symbol(name=m.group(1), kind="function", lineno=lineno))
+            m = re.match(r"type\s+([A-Za-z_][A-Za-z0-9_]*)\s+struct", stripped)
+            if m:
+                result.symbols.append(Symbol(name=m.group(1), kind="class", lineno=lineno))
+
+        elif lang == "rust":
+            m = re.match(r"(?:pub\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+            if m:
+                result.symbols.append(Symbol(name=m.group(1), kind="function", lineno=lineno))
+            m = re.match(r"(?:pub\s+)?struct\s+([A-Za-z_][A-Za-z0-9_]*)", stripped)
+            if m:
+                result.symbols.append(Symbol(name=m.group(1), kind="class", lineno=lineno))
 
     return result
 

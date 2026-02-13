@@ -149,3 +149,40 @@ def top_symbols(conn: sqlite3.Connection, limit: int = 20) -> Iterable[sqlite3.R
         """,
         (limit,),
     )
+
+
+def call_paths_to_symbol(conn: sqlite3.Connection, symbol_name: str, max_depth: int = 3, limit: int = 30) -> list[list[str]]:
+    """Return caller chains that eventually reach symbol_name through calls edges."""
+    if max_depth < 1:
+        return []
+
+    paths: list[list[str]] = []
+    queue: list[tuple[str, list[str], int]] = [(symbol_name, [symbol_name], 0)]
+    seen: set[tuple[str, int]] = {(symbol_name, 0)}
+
+    while queue and len(paths) < limit:
+        current, chain, depth = queue.pop(0)
+        callers = callers_of(conn, current)
+        if not callers:
+            if len(chain) > 1:
+                paths.append(chain)
+            continue
+
+        for row in callers:
+            caller = row["caller"]
+            if not caller or caller in chain:
+                continue
+            next_chain = [caller] + chain
+            if depth + 1 >= max_depth:
+                paths.append(next_chain)
+                if len(paths) >= limit:
+                    break
+                continue
+
+            key = (caller, depth + 1)
+            if key in seen:
+                continue
+            seen.add(key)
+            queue.append((caller, next_chain, depth + 1))
+
+    return paths[:limit]

@@ -93,6 +93,9 @@ def cmd_eval(args: argparse.Namespace) -> int:
         use_llm=args.llm,
         model=args.model,
     )
+    if args.min_confidence is not None:
+        low = [c for c in result.get("per_case", []) if float(c.get("confidence", 0.0)) < args.min_confidence]
+        result["below_min_confidence"] = len(low)
     print(json.dumps(result, indent=2))
     return 0
 
@@ -132,6 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--dataset", required=True, help="JSONL file with question and must_include fields")
     ev.add_argument("--llm", action="store_true")
     ev.add_argument("--model")
+    ev.add_argument("--min-confidence", type=float, help="Optional threshold for low-confidence count")
     ev.set_defaults(func=cmd_eval)
 
     docs = sub.add_parser("generate-docs", help="Generate architecture docs")

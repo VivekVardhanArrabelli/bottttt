@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -61,3 +62,19 @@ def suggest_owners(paths: list[str], codeowners_rules: list[tuple[str, list[str]
             if normalized == "*" or path.startswith(normalized.rstrip("*")):
                 owners.update(people)
     return sorted(owners)
+
+
+def guardrail_settings() -> dict[str, float]:
+    def _float(name: str, default: float) -> float:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        try:
+            return float(raw)
+        except ValueError:
+            return default
+
+    return {
+        "min_confidence": _float("CBG_MIN_CONFIDENCE", 0.45),
+        "flagged_max_confidence": _float("CBG_FLAGGED_MAX_CONFIDENCE", 0.5),
+    }

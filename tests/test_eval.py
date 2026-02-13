@@ -18,8 +18,9 @@ class EvalTests(unittest.TestCase):
 
             dataset = Path("tests/fixtures/eval_dataset.jsonl").resolve()
             result = run_eval_suite(db, dataset)
-            self.assertEqual(result["cases"], 1)
-            self.assertIn("avg_confidence", result)
+            self.assertEqual(result["cases"], 2)
+            self.assertIn("policy_precision", result)
+            self.assertEqual(len(result["per_case"]), 2)
 
 
 if __name__ == "__main__":
