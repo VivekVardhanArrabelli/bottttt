@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 from codebasegpt.ai import answer_question
 from codebasegpt.docs import generate_architecture_doc
+from codebasegpt.eval import run_eval_suite
 from codebasegpt.graph import callers_of, connect, impacts_of
 from codebasegpt.indexer import index_repository
 from codebasegpt.migration import generate_migration_guide
@@ -49,7 +51,15 @@ def cmd_impacts(args: argparse.Namespace) -> int:
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
-    print(answer_question(Path(args.db).resolve(), args.question, use_llm=args.llm, model=args.model))
+    db = Path(args.db).resolve()
+    repo = Path(args.repo).resolve() if args.repo else None
+    if args.json:
+        from codebasegpt.ai import answer_question_with_metadata
+
+        out = answer_question_with_metadata(db, args.question, use_llm=args.llm, model=args.model, repo_path=repo)
+        print(json.dumps(out, indent=2))
+    else:
+        print(answer_question(db, args.question, use_llm=args.llm, model=args.model, repo_path=repo))
     return 0
 
 
@@ -73,6 +83,18 @@ def cmd_migration(args: argparse.Namespace) -> int:
 
 
 
+
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    result = run_eval_suite(
+        db_path=Path(args.db).resolve(),
+        dataset_path=Path(args.dataset).resolve(),
+        use_llm=args.llm,
+        model=args.model,
+    )
+    print(json.dumps(result, indent=2))
+    return 0
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="cbg", description="CodebaseGPT CLI")
@@ -99,9 +121,18 @@ def build_parser() -> argparse.ArgumentParser:
     ask.add_argument("--db", required=True)
     ask.add_argument("--llm", action="store_true", help="Use configured LLM API for answer synthesis")
     ask.add_argument("--model", help="Override model name when using --llm")
+    ask.add_argument("--repo", help="Repository path for CODEOWNERS-based owner suggestions")
+    ask.add_argument("--json", action="store_true", help="Return structured output with confidence and policy flags")
     ask.set_defaults(func=cmd_ask)
 
 
+
+    ev = sub.add_parser("evaluate", help="Run evaluation suite from JSONL dataset")
+    ev.add_argument("--db", required=True)
+    ev.add_argument("--dataset", required=True, help="JSONL file with question and must_include fields")
+    ev.add_argument("--llm", action="store_true")
+    ev.add_argument("--model")
+    ev.set_defaults(func=cmd_eval)
 
     docs = sub.add_parser("generate-docs", help="Generate architecture docs")
     docs.add_argument("--db", required=True)

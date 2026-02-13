@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import graph
+from .ops import append_jsonl, detect_policy_flags, load_codeowners, redact_pii, suggest_owners
 
 
 QUESTION_PATTERNS = {
@@ -103,11 +104,13 @@ def _collect_evidence(db_path: Path, question: str, limit: int = 40) -> list[Evi
             tuple(params),
         ).fetchall()
 
-        # lightweight ranking: reward direct token overlap in symbol/path names
         scored: list[tuple[int, object]] = []
         for row in raw_rows:
             hay = f"{row['symbol']} {row['path']} {row['relation_type']}".lower()
             score = sum(2 if t in row["symbol"].lower() else 1 for t in terms if t in hay)
+            # boost relations that indicate flow
+            if row["relation_type"] in {"calls", "imports"}:
+                score += 2
             scored.append((score, row))
 
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -142,13 +145,11 @@ def _heuristic_answer(question: str, evidence: list[EvidenceItem]) -> str:
     if not evidence:
         return "No indexed evidence found. Run indexing first or refine your question."
 
-    lines = ["Direct answer (evidence-grounded)", f"Question: {question}", ""]
-    lines.append("Relevant components:")
+    lines = ["Direct answer (evidence-grounded)", f"Question: {question}", "", "Relevant components:"]
     for item in evidence[:12]:
         location = f"{item.path}:{item.lineno}" if item.lineno else item.path
         lines.append(f"- `{item.symbol}` ({item.kind}) via `{item.relation_type}` in `{location}`")
-    lines.append("")
-    lines.append("Confidence note: heuristic mode. Use --llm for higher quality synthesis.")
+    lines.extend(["", "Uncertainty: heuristic mode. Use --llm for richer synthesis."])
     return "\n".join(lines)
 
 
@@ -173,7 +174,7 @@ def _llm_answer(question: str, evidence: list[EvidenceItem], model: str | None =
                 "role": "system",
                 "content": (
                     "You are a codebase analysis assistant. Answer strictly from provided evidence. "
-                    "State uncertainty explicitly if evidence is weak."
+                    "State uncertainty explicitly if evidence is weak and avoid unsupported claims."
                 ),
             },
             {
@@ -191,10 +192,7 @@ def _llm_answer(question: str, evidence: list[EvidenceItem], model: str | None =
     req = urllib.request.Request(
         api_url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         method="POST",
     )
 
@@ -209,7 +207,9 @@ def answer_question_with_metadata(
     question: str,
     use_llm: bool = False,
     model: str | None = None,
+    repo_path: Path | None = None,
 ) -> dict[str, object]:
+    flags = detect_policy_flags(question)
     evidence = _collect_evidence(db_path, question)
     evidence_count = len(evidence)
 
@@ -226,13 +226,59 @@ def answer_question_with_metadata(
     else:
         answer = _heuristic_answer(question, evidence)
 
-    return {
+    if flags:
+        confidence = min(confidence, 0.5)
+
+    needs_human = confidence < 0.45 or evidence_count == 0 or bool(flags)
+
+    evidence_paths = sorted({e.path for e in evidence[:15]})
+    owners: list[str] = []
+    if repo_path is not None:
+        owners = suggest_owners(evidence_paths, load_codeowners(repo_path.resolve()))
+
+    answer = redact_pii(answer)
+
+    result = {
         "answer": answer,
         "evidence_count": evidence_count,
         "confidence": confidence,
-        "needs_human": confidence < 0.45 or evidence_count == 0,
+        "needs_human": needs_human,
+        "policy_flags": flags,
+        "evidence_paths": evidence_paths,
+        "owner_suggestions": owners,
+        "next_actions": [
+            "Escalate for human review" if needs_human else "Respond with cited components",
+            "Inspect top evidence paths for confirmation",
+        ],
     }
 
+    telemetry_path = Path(os.getenv("CBG_TELEMETRY_PATH", ".codebasegpt/queries.jsonl"))
+    append_jsonl(
+        telemetry_path,
+        {
+            "question": question,
+            "confidence": round(confidence, 3),
+            "needs_human": needs_human,
+            "evidence_count": evidence_count,
+            "policy_flags": flags,
+        },
+    )
+    return result
 
-def answer_question(db_path: Path, question: str, use_llm: bool = False, model: str | None = None) -> str:
-    return str(answer_question_with_metadata(db_path, question, use_llm=use_llm, model=model)["answer"])
+
+def answer_question(
+    db_path: Path,
+    question: str,
+    use_llm: bool = False,
+    model: str | None = None,
+    repo_path: Path | None = None,
+) -> str:
+    return str(
+        answer_question_with_metadata(
+            db_path,
+            question,
+            use_llm=use_llm,
+            model=model,
+            repo_path=repo_path,
+        )["answer"]
+    )

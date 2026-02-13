@@ -1,42 +1,35 @@
 # Production-Grade Support Agent Roadmap (3 Phases)
 
-## Phase 1 — Retrieval and answer quality hardening (now -> near term)
+## Phase 1 — Retrieval and answer quality hardening
 
-**Goal:** Make answers consistently evidence-backed and higher precision.
+### Implemented in this repo
+- Multi-term extraction (topic + token parsing).
+- Lightweight evidence ranking with flow-edge boosting.
+- Structured answer format with direct answer, components, and uncertainty.
+- Evaluation harness via JSONL dataset (`cbg.py evaluate`).
 
-- Multi-query retrieval strategy (symbol, file, relation, and call-path views).
-- Better ranking features (term overlap, relation weights, recency, file importance).
-- Response schema with explicit sections: direct answer, evidence, uncertainty, next checks.
-- Evaluation harness with golden Q&A set and precision/recall tracking.
-- Language parser expansion beyond Python with parity targets.
-
-**Exit criteria**
-- >=85% answer usefulness on curated internal benchmark.
-- <=5% unsupported assertions on audited sample.
+### Remaining
+- Add call-path retrieval beyond single-hop relations.
+- Expand parser parity across non-Python languages.
 
 ## Phase 2 — Reliability, guardrails, and ops integration
 
-**Goal:** Safe operation for support workflows.
+### Implemented in this repo
+- Confidence scoring + `needs_human` abstain signal.
+- Policy flag detection for sensitive questions.
+- PII redaction (emails/cards) in generated responses.
+- Query telemetry logging to `.codebasegpt/queries.jsonl`.
 
-- Confidence calibration and abstain/escalation thresholds.
-- Policy and safety filters (PII, legal/security-sensitive handling).
-- Observability: request traces, evidence logs, latency/error dashboards.
-- Deterministic fallback paths when LLM unavailable.
-- Queue/webhook integration for external ticket systems.
-
-**Exit criteria**
-- SLA-backed latency p95 defined and met.
-- Escalation precision validated against reviewed ticket set.
+### Remaining
+- Full policy engine and configurable thresholds.
+- Latency/error dashboards and SLA tracking.
 
 ## Phase 3 — Autonomous support + dev-assist workflow
 
-**Goal:** Close the loop from customer question to engineering action.
+### Implemented in this repo
+- Owner suggestions based on CODEOWNERS + retrieved evidence paths.
+- Next-action recommendations in structured response metadata.
 
-- Automatic conversion of high-confidence root causes into engineering tasks.
-- Suggested code-owner routing from graph dependencies and ownership maps.
-- PR/change recommendations generated from validated evidence context.
-- Continuous evaluation in production with feedback loops and retraining data.
-
-**Exit criteria**
-- Measurable MTTR reduction in pilot.
-- Increased first-response quality and reduced manual triage load.
+### Remaining
+- Automatic task creation and code-owner routing integrations.
+- Closed-loop feedback/retraining from production outcomes.

@@ -2,3 +2,5 @@ __pycache__/
 *.pyc
 .codebasegpt.sqlite
 ARCHITECTURE.generated.md
+
+.codebasegpt/
