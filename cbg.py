@@ -49,7 +49,7 @@ def cmd_impacts(args: argparse.Namespace) -> int:
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
-    print(answer_question(Path(args.db).resolve(), args.question))
+    print(answer_question(Path(args.db).resolve(), args.question, use_llm=args.llm, model=args.model))
     return 0
 
 
@@ -94,6 +94,8 @@ def build_parser() -> argparse.ArgumentParser:
     ask = sub.add_parser("ask", help="Ask a natural-language question")
     ask.add_argument("question")
     ask.add_argument("--db", required=True)
+    ask.add_argument("--llm", action="store_true", help="Use configured LLM API for answer synthesis")
+    ask.add_argument("--model", help="Override model name when using --llm")
     ask.set_defaults(func=cmd_ask)
 
     docs = sub.add_parser("generate-docs", help="Generate architecture docs")
