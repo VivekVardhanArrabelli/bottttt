@@ -1,23 +1,53 @@
-# bottttt
+# bottttt (CodebaseGPT)
 
-CodebaseGPT — An Open-Source Codebase Understanding Engine
-A tool where you point it at any GitHub repo and it:
-   Indexes the entire codebase — builds a semantic graph of every file, function, class, dependency, and data flow
-   Generates living documentation — not just READMEs, but interactive architecture diagrams, onboarding guides, and “how does X work?” explainers
-   Answers natural language questions — “Where does authentication happen?”, “What happens when a user clicks checkout?”, “What would break if I changed this schema?”
-   Produces PR review context — for any diff, it explains blast radius, affected tests, and potential regressions
-   Auto-generates migration guides — “How do I upgrade from v2 to v3?” by diffing tagged releases
+CodebaseGPT is a local-first codebase understanding engine for high-quality, evidence-grounded answers over source code.
 
-Why this wins:
-    ∙    Immediately useful from day 1 — every engineer onboarding to a new codebase needs this. Every open-source maintainer wants this.
-    ∙    Massive audience — millions of developers, researchers reading code, companies onboarding engineers
-    ∙    Real pain point — understanding someone else’s code is the #1 time sink in software engineering
-    ∙    Perfect for parallel agents — one swarm indexes repos, another builds the graph DB, another builds the web UI, another handles the Q&A pipeline, another writes tests
-Tech stack: Rust CLI + tree-sitter for parsing, Neo4j/SQLite for the code graph, Claude API for Q&A and doc generation, simple Next.js frontend, deploy as a GitHub App + self-hosted option.
-Week breakdown:
-    ∙     Parsing engine + code graph (3-4 agents in parallel across languages)
-    ∙     Claude-powered Q&A over the graph
-    ∙     Web UI + GitHub integration
-    ∙     Doc generation + PR review features
-    ∙    Polish, demo repo showcases, launch on HN
-The moat is that it’s open-source and local-first — unlike Sourcegraph or GitHub Copilot, you own your index. Researchers can use it to study codebases, companies can run it on private repos, and OSS maintainers can embed the generated docs directly.
+## What is implemented
+
+- Repository indexing into SQLite (`files`, `symbols`, `relations`)
+- Python semantic extraction (functions, classes, imports, calls, inheritance)
+- Query commands for callers and impact
+- Hybrid Q&A (graph retrieval + optional LLM synthesis)
+- Policy flags + PII redaction + abstain/escalation signal (`needs_human`)
+- Observability telemetry (`.codebasegpt/queries.jsonl`)
+- Evaluation harness (`evaluate` command with JSONL datasets)
+- Owner suggestions via CODEOWNERS matching
+
+## Quickstart
+
+### 1) Index a repository
+```bash
+python cbg.py index /path/to/repo
+```
+
+### 2) Ask questions (text)
+```bash
+python cbg.py ask "How does checkout work?" --db /path/to/repo/.codebasegpt.sqlite
+```
+
+### 3) Ask questions (structured JSON)
+```bash
+python cbg.py ask "Where does authentication happen?" \
+  --db /path/to/repo/.codebasegpt.sqlite \
+  --repo /path/to/repo \
+  --json
+```
+
+### 4) Use LLM synthesis
+```bash
+export CBG_LLM_API_KEY=...
+export CBG_LLM_API_URL=https://api.openai.com/v1/chat/completions
+export CBG_LLM_MODEL=gpt-4o-mini
+python cbg.py ask "Explain auth flow" --db /path/to/repo/.codebasegpt.sqlite --llm --json
+```
+
+### 5) Run evaluation suite
+```bash
+python cbg.py evaluate \
+  --db /path/to/repo/.codebasegpt.sqlite \
+  --dataset tests/fixtures/eval_dataset.jsonl
+```
+
+## Roadmap execution status
+
+See `ROADMAP.md` for the 3-phase plan and what has now been implemented from each phase.
